@@ -21,14 +21,41 @@
 #            docker images day12-agent:prod     # xem dung lượng
 # ═══════════════════════════════════════════════════════════════════
 
-FROM python:3.11
+# ── Stage 1: Builder ──
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
+# Layer cache: copy requirements first
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ── Stage 2: Runtime ──
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy installed dependencies from builder stage
+COPY --from=builder /install /usr/local
+
+# Create non-root user for security
+RUN useradd -u 10001 --create-home appuser
+
+# Copy application code
 COPY . .
 
-RUN pip install -r requirements.txt
+# Adjust permissions for non-root user
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENV PORT=8000 \
+    PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD python -c "import urllib.request, os; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/health')" || exit 1
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
